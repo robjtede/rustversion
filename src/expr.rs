@@ -11,6 +11,7 @@ pub enum Expr {
     Stable,
     Beta,
     Nightly,
+    Msrv,
     Date(Date),
     Since(Bound),
     Before(Bound),
@@ -31,6 +32,18 @@ impl Expr {
                 Channel::Nightly(_) | Channel::Dev => true,
                 Channel::Stable | Channel::Beta => false,
             },
+            Msrv => {
+                #[allow(clippy::option_env_unwrap)]
+                let mut cargo_rust_version = option_env!("CARGO_PKG_RUST_VERSION")
+                    .expect("manifest should specify a rust-version to use the msrv macro")
+                    .splitn(3, '.');
+
+                let _maj = cargo_rust_version.next().unwrap();
+                let min = cargo_rust_version.next().unwrap().parse().unwrap();
+                let patch = cargo_rust_version.next().unwrap().parse().unwrap();
+
+                rustc.channel == Channel::Stable && rustc.minor == min && rustc.patch >= patch
+            }
             Date(date) => match rustc.channel {
                 Channel::Nightly(rustc) => rustc == *date,
                 Channel::Stable | Channel::Beta | Channel::Dev => false,
@@ -54,6 +67,7 @@ pub fn parse(iter: Iter) -> Result<Expr> {
         Some(TokenTree::Ident(i)) if i.to_string() == "stable" => parse_stable(iter),
         Some(TokenTree::Ident(i)) if i.to_string() == "beta" => Ok(Expr::Beta),
         Some(TokenTree::Ident(i)) if i.to_string() == "nightly" => parse_nightly(iter),
+        Some(TokenTree::Ident(i)) if i.to_string() == "msrv" => parse_msrv(iter),
         Some(TokenTree::Ident(i)) if i.to_string() == "since" => parse_since(i, iter),
         Some(TokenTree::Ident(i)) if i.to_string() == "before" => parse_before(i, iter),
         Some(TokenTree::Ident(i)) if i.to_string() == "not" => parse_not(i, iter),
@@ -72,6 +86,20 @@ fn parse_nightly(iter: Iter) -> Result<Expr> {
     let paren = match token::parse_optional_paren(iter) {
         Some(group) => group,
         None => return Ok(Expr::Nightly),
+    };
+
+    let ref mut inner = iter::new(paren.stream());
+    let date = date::parse(paren, inner)?;
+    token::parse_optional_punct(inner, ',');
+    token::parse_end(inner)?;
+
+    Ok(Expr::Date(date))
+}
+
+fn parse_msrv(iter: Iter) -> Result<Expr> {
+    let paren = match token::parse_optional_paren(iter) {
+        Some(group) => group,
+        None => return Ok(Expr::Msrv),
     };
 
     let ref mut inner = iter::new(paren.stream());
